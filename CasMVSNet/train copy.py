@@ -92,7 +92,36 @@ def train(model, model_loss, optimizer, TrainImgLoader, TestImgLoader, start_epo
                            scalar_outputs['depth_loss'],
                            time.time() - start_time))
                 del scalar_outputs, image_outputs
+            if batch_idx% 1000 == 0 and batch_idx!=0:
+                torch.save({
+                    'epoch': epoch_idx,
+                    'model': model.module.state_dict(),
+                    'optimizer': optimizer.state_dict()},
+                    "{}/model_{:0>6}.ckpt".format(args.logdir, epoch_idx))
+            if batch_idx% (len(TrainImgLoader)//2+1) == 0 and batch_idx!=0:
+                avg_test_scalars = DictAverageMeter()
+                for batch_idx, sample in enumerate(TestImgLoader):
+                    start_time = time.time()
+                    global_step = len(TrainImgLoader) * epoch_idx + batch_idx
+                    do_summary = global_step % args.summary_freq == 0
+                    loss, scalar_outputs, image_outputs = test_sample_depth(model, model_loss, sample, args)
+                    if (not is_distributed) or (dist.get_rank() == 0):
+                        if do_summary:
+                            save_scalars(logger, 'test', scalar_outputs, global_step)
+                            save_images(logger, 'test', image_outputs, global_step)
+                            print("Epoch {}/{}, Iter {}/{}, test loss = {:.3f}, depth loss = {:.3f}, time = {:3f}".format(
+                                                                                epoch_idx, args.epochs,
+                                                                                batch_idx,
+                                                                                len(TestImgLoader), loss,
+                                                                                scalar_outputs["depth_loss"],
+                                                                                time.time() - start_time))
+                        avg_test_scalars.update(scalar_outputs)
+                        del scalar_outputs, image_outputs
 
+                if (not is_distributed) or (dist.get_rank() == 0):
+                    save_scalars(logger, 'fulltest', avg_test_scalars.mean(), global_step)
+                    print("avg_test_scalars:", avg_test_scalars.mean())
+                gc.collect()
         # checkpoint
         if (not is_distributed) or (dist.get_rank() == 0):
             if (epoch_idx + 1) % args.save_freq == 0:
@@ -278,36 +307,39 @@ def profile():
 
 if __name__ == '__main__':
     # parse arguments and check
-    if 0:
+    if 1:
         args = parser.parse_args(["--resume",\
         '--mode', 'train',\
-        '--dataset','meta',\
-        '--batch_size','6',\
+        '--dataset','newmvs_human',\
+        '--batch_size','{}'.format(torch.cuda.device_count()*1),\
         #'--trainpath','/data3/MVFR_DATASET/Res256/meta/6_4/',\
-        '--trainpath','/data3/MVFR_DATASET/Res1024/meta/7_27/',\
+        '--trainpath','/mnt/dataset/06Visg-Azure-kinect/dataset/newmvs_human/mvs_human_1024/',\
         '--trainlist','lists/dtu/train.txt',\
         '--testlist','lists/dtu/test.txt',\
         '--numdepth','192',\
-        '--logdir','./checkpoints/d508highlr',\
+        '--logdir','./checkpoints/mvs_humannew1',\
         '--lr', "0.001",\
-        '--lrepochs',"24,30,34:2",\
+        '--lrepochs',"3,5,6:2",\
         '--summary_freq', '30',\
-        # '--loadckpt','./checkpoints/d192/casmvsnet_00016.ckpt',\
+        # '--loadckpt','./checkpoints/mvs_humannewwithout3dcon/model_000002.ckpt',\
         # '--loadckpt','./checkpoints/debug/model_000016.ckpt',\
-        '--epochs','56'])
+        '--epochs','8',\
+        '--using_apex',\
+        '--sync_bn'
+        ])
     else:
         args = parser.parse_args([
         '--mode', 'test',\
-        '--dataset','meta',\
-        '--batch_size','1',\
+        '--dataset','newmvs_human',\
+        '--batch_size','2',\
         #'--trainpath','/data3/MVFR_DATASET/Res256/meta/6_4/',\
-        '--trainpath','/data3/MVFR_DATASET/Res1024/meta/7_27/',\
+        '--trainpath','/mnt/dataset/06Visg-Azure-kinect/dataset/newmvs_human/mvs_human_1024/',\
         '--trainlist','lists/dtu/train.txt',\
         '--testlist','lists/dtu/test.txt',\
         '--numdepth','192',\
         '--logdir','./checkpoints/debug',\
-        '--loadckpt','./checkpoints/d508newhighlr/model_000039.ckpt',\
-       # '--loadckpt','./checkpoints/debug/casmvsnet_00016.ckpt',\
+        #'--loadckpt','./checkpoints/d508highlr/model_000043.ckpt',\
+        '--loadckpt','./checkpoints/mvs_humannewwithout3dcon/model_000007.ckpt',\
         '--epochs','40'])
 
     # using sync_bn by using nvidia-apex, need to install apex.
@@ -428,7 +460,7 @@ if __name__ == '__main__':
     else:
         TrainImgLoader = DataLoader(train_dataset, args.batch_size, shuffle=True, num_workers=8, drop_last=True,
                                     pin_memory=args.pin_m)
-        TestImgLoader = DataLoader(test_dataset, 1, shuffle=False, num_workers=4, drop_last=False,
+        TestImgLoader = DataLoader(test_dataset, args.batch_size*2, shuffle=False, num_workers=16, drop_last=False,
                                    pin_memory=args.pin_m)
 
 
@@ -438,5 +470,5 @@ if __name__ == '__main__':
         test(model, model_loss, TestImgLoader, args)
     elif args.mode == "profile":
         profile()
-    else:
+    else: 
         raise NotImplementedError

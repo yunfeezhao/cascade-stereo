@@ -130,7 +130,7 @@ class Conv3d(nn.Module):
         super(Conv3d, self).__init__()
         self.out_channels = out_channels
         self.kernel_size = kernel_size
-        assert stride in [1, 2]
+        #assert stride in [1, 2]
         self.stride = stride
 
         self.conv = nn.Conv3d(in_channels, out_channels, kernel_size, stride=stride,
@@ -173,7 +173,7 @@ class Deconv3d(nn.Module):
                  relu=True, bn=True, bn_momentum=0.1, init_method="xavier", **kwargs):
         super(Deconv3d, self).__init__()
         self.out_channels = out_channels
-        assert stride in [1, 2]
+        #assert stride in [1, 2]
         self.stride = stride
 
         self.conv = nn.ConvTranspose3d(in_channels, out_channels, kernel_size, stride=stride,
@@ -301,7 +301,7 @@ def homo_warping(src_fea, src_proj, ref_proj, depth_values):
     height, width = src_fea.shape[2], src_fea.shape[3]
 
     with torch.no_grad():
-        proj = torch.matmul(src_proj, torch.inverse(ref_proj))
+        proj = torch.matmul(src_proj, torch.linalg.inv(ref_proj))
         rot = proj[:, :3, :3]  # [B,3,3]
         trans = proj[:, :3, 3:4]  # [B,3,1]
 
@@ -452,26 +452,34 @@ class FeatureNet(nn.Module):
         return outputs
 
 class CostRegNet(nn.Module):
-    def __init__(self, in_channels, base_channels):
+    def __init__(self, in_channels, base_channels,i):
         super(CostRegNet, self).__init__()
-        self.conv0 = Conv3d(in_channels, base_channels, padding=1)
+        if i>=0:
+            kernel_size=(3,3,3)
+            stride=(2,2,2)
+            padding=(1,1,1)
+        else:
+            kernel_size=(1,3,3)
+            stride=(1,2,2)
+            padding=(0,1,1)
+        self.conv0 = Conv3d(in_channels, base_channels,kernel_size=kernel_size, padding=padding)
 
-        self.conv1 = Conv3d(base_channels, base_channels * 2, stride=2, padding=1)
-        self.conv2 = Conv3d(base_channels * 2, base_channels * 2, padding=1)
+        self.conv1 = Conv3d(base_channels, base_channels * 2,kernel_size=kernel_size, stride=stride, padding=padding)
+        self.conv2 = Conv3d(base_channels * 2, base_channels * 2,kernel_size=kernel_size, padding=padding)
 
-        self.conv3 = Conv3d(base_channels * 2, base_channels * 4, stride=2, padding=1)
-        self.conv4 = Conv3d(base_channels * 4, base_channels * 4, padding=1)
+        self.conv3 = Conv3d(base_channels * 2, base_channels * 4, kernel_size=kernel_size,stride=stride, padding=padding)
+        self.conv4 = Conv3d(base_channels * 4, base_channels * 4,kernel_size=kernel_size, padding=padding)
 
-        self.conv5 = Conv3d(base_channels * 4, base_channels * 8, stride=2, padding=1)
-        self.conv6 = Conv3d(base_channels * 8, base_channels * 8, padding=1)
+        self.conv5 = Conv3d(base_channels * 4, base_channels * 8,kernel_size=kernel_size, stride=stride, padding=padding)
+        self.conv6 = Conv3d(base_channels * 8, base_channels * 8,kernel_size=kernel_size, padding=padding)
 
-        self.conv7 = Deconv3d(base_channels * 8, base_channels * 4, stride=2, padding=1, output_padding=1)
+        self.conv7 = Deconv3d(base_channels * 8, base_channels * 4,kernel_size=kernel_size, stride=stride, padding=padding, output_padding=padding)
 
-        self.conv9 = Deconv3d(base_channels * 4, base_channels * 2, stride=2, padding=1, output_padding=1)
+        self.conv9 = Deconv3d(base_channels * 4, base_channels * 2,kernel_size=kernel_size, stride=stride, padding=padding, output_padding=padding)
 
-        self.conv11 = Deconv3d(base_channels * 2, base_channels * 1, stride=2, padding=1, output_padding=1)
+        self.conv11 = Deconv3d(base_channels * 2, base_channels * 1,kernel_size=kernel_size, stride=stride, padding=padding, output_padding=padding)
 
-        self.prob = nn.Conv3d(base_channels, 1, 3, stride=1, padding=1, bias=False)
+        self.prob = nn.Conv3d(base_channels, 1, kernel_size=(3,3,3), stride=1, padding=(1,1,1), bias=False)
 
     def forward(self, x):
         conv0 = self.conv0(x)

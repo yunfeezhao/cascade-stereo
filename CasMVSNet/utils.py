@@ -309,3 +309,91 @@ def generate_pointcloud(rgb, depth, ply_file, intr, scale=1.0):
             ''' % (len(points), "".join(points)))
     file.close()
     print("save ply, fx:{}, fy:{}, cx:{}, cy:{}".format(fx, fy, cx, cy))
+
+def xyzrgb_save_mask(filename,cloud_xyz,rgb,M,mask):
+    H,W = mask.shape[:2]
+    def validindex(x, y):
+        return x>=0 and x<W and y>=0 and y<H and mask[y,x]>200
+    validxy_arr = np.argwhere(mask[:,:]>200)
+    vert=[]
+    face=[]
+    vertcolor=[]
+    vert_index_map=np.zeros([H,W,1]).astype(np.int32)
+    for i in range(validxy_arr.shape[0]):
+        y = validxy_arr[i,0]
+        x = validxy_arr[i,1]
+        vert.append(cloud_xyz[y,x])
+        vertcolor.append(rgb[y,x])
+        vert_index_map[y,x]=i+1
+    for i in range(validxy_arr.shape[0]):
+        y = validxy_arr[i, 0]
+        x = validxy_arr[i, 1]
+        distance=10
+        if validindex(x,y+1) and validindex(x+1,y) :
+            if abs(cloud_xyz[y,x]).max()>0 and\
+            abs(cloud_xyz[y,x]-cloud_xyz[y,x+1]).max()<distance\
+            and abs(cloud_xyz[y,x]-cloud_xyz[y+1,x]).max()<distance\
+            and abs(cloud_xyz[y,x+1]-cloud_xyz[y+1,x]).max()<distance :
+              face.append([vert_index_map[y,x,0],vert_index_map[y+1,x,0],vert_index_map[y,x+1,0]])
+        if validindex(x-1,y) and validindex(x,y-1):
+            if abs(cloud_xyz[y,x]).max()>0 and\
+            abs(cloud_xyz[y,x]-cloud_xyz[y,x-1]).max()<distance\
+            and abs(cloud_xyz[y,x]-cloud_xyz[y-1,x]).max()<distance\
+            and abs(cloud_xyz[y,x-1]-cloud_xyz[y-1,x]).max()<distance :
+                face.append([vert_index_map[y,x,0],vert_index_map[y-1,x,0],vert_index_map[y,x-1,0]])
+
+    objfile = file = open(filename,'w')
+    all_points = np.array(vert)
+    all_faces = np.array(face)
+    # print np.min(all_faces)
+    vertcolor = np.array(vertcolor)
+    for i in range(all_points.shape[0]):
+        p=np.dot(np.array([[all_points[i,0],all_points[i,1],all_points[i,2],1]]),M)
+        s="v  "+str(p[0,0])+"  "+str(p[0,1])+"  "+\
+            str(p[0,2])+"  "+str(vertcolor[i,0])+"  "+\
+                str(vertcolor[i,1])+"  "+str(vertcolor[i,2])+"\n"
+        file.write(s)
+    for j in range(all_faces.shape[0]):
+        # print all_faces[j,0]
+        objfile.writelines('f ' + str(all_faces[j,0])+' '+str(all_faces[j,1])+' '+str(all_faces[j,2])+'\n')
+    objfile.close()
+    print(filename,"xyzrgb_saved")
+def make_coordinate_grid(spatial_size, type, znorm=True):
+    '''
+    return [H,W,2]
+    '''
+    h, w = spatial_size
+    x = torch.arange(w).type(type) 
+    y = torch.arange(h).type(type) 
+    if znorm:
+        x = 2 * x / w - 1.
+        y = 2 * y / h - 1.
+    yy = y.view(-1, 1).repeat(1, w)
+    xx = x.view(1, -1).repeat(h, 1)
+    meshed = torch.cat([xx.unsqueeze_(2), yy.unsqueeze_(2)], 2)
+    return meshed
+
+def depth2cloud(depth, K):
+    if len(depth.shape) == 2:
+        depth = depth[:, :, None]
+    h, w = depth.shape[1:3]
+    fx = K[ 0, 0]
+    fy = K[ 1, 1]
+    cx = K[ 0, 2]
+    cy = K[1, 2]
+    cxy = K[0:2, 2]
+    fxy = np.array([fx,fy])  # [bs,2]
+    coord_abs = make_coordinate_grid([h, w],\
+        depth.dtype, znorm=False).unsqueeze(0).to(depth.device)  # [bs,H,W,2]
+    xy_flat = (coord_abs - cxy[ None, None, :]) / \
+        (fxy[ None, None, :]+1e-10)  # [bs,H,W,2]
+    cloud = torch.cat([xy_flat*depth, depth], 3)
+    return cloud
+
+def generate_meshcloud(img, depth, obj_filename,mask, K,M):
+        depth=np.expand_dims(depth,axis=0)
+        depth=np.expand_dims(depth,axis=-1)
+        depth =torch.from_numpy(depth)
+        cloud=depth2cloud(depth,K).numpy()
+        cloud=cloud.squeeze(axis=0)
+        xyzrgb_save_mask(obj_filename,cloud,img,M,mask)
